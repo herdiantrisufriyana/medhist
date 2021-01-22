@@ -1,0 +1,29 @@
+#' Visits paid by capitation payment system.
+#'
+#' A dataset containing the visits. All visits of a subject sample are included
+#' of which admission dates range from January 1st, 2015 to December 31st, 2016.
+#' The discharge date may be up to 2017. In this table, only visits from primary
+#' care are included. These visits are not paid. Instead, the provider is
+#' monthly paid per subject regardless the number of visits. Therefore, there is
+#' no claimed or verified cost.
+#'
+#' @format A data frame with 1,733,757 rows and 6 columns:
+#' \describe{
+#'   \item{visit_id}{Visit ID. Each ID is unique to one episode (from
+#'       admission to discharge) per provider. This connects to
+#'       \code{diagnosis} data.}
+#'   \item{subject_id}{Subject ID. This connects to \code{subject} data.}
+#'   \item{healthcare_id}{Provider ID. The provider is the one of which the
+#'       subject visits (not always one the subject registered to). This
+#'       connects to \code{healthcare} data.}
+#'   \item{admission_date}{Admission date of this visit.}
+#'   \item{discharge_date}{Discharge date of this visit.}
+#'   \item{discharge_status}{Categorical variable of discharge status, consisting
+#'       \code{discharged to home}, \code{return for outpatient services},
+#'       \code{transferred within this facility},
+#'       \code{transferred to higher-level care},
+#'       \code{left against medical advice or discontinued care},
+#'       \code{expired}, and \code{other}.}
+#' }
+#' @source Artificial data
+'visit_cap'
