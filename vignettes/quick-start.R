@@ -60,7 +60,7 @@ mh_table=
   extract_medical_history()
 
 ## Construct unified data as a TidySet
-medhisdata=compile_mh_outcome(mh_table,outcome)
+medhistdata=compile_mh_outcome(mh_table,outcome)
 
 ## Add optional data
 data(mdata)
