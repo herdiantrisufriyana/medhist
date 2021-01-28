@@ -30,14 +30,25 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.1.1
 Imports: 
     devtools,
-    tidyverse
+    tidyverse,
+    pbapply,
+    parallel,
+    BiocGenerics,
+    lubridate,
+    Biobase,
+    broom,
+    survival,
+    imputeTS,
+    caret,
+    MLeval
 Suggests:
     BiocStyle,
     knitr,
     rmarkdown,
     kableExtra,
+    dslabs,
     magick,
     testthat
-URL: https://github.com/herdiantrisufriyana/alignontology
-BugReports: https://github.com/herdiantrisufriyana/alignontology/issues
+URL: https://github.com/herdiantrisufriyana/medhist
+BugReports: https://github.com/herdiantrisufriyana/medhist/issues
 VignetteBuilder: knitr
