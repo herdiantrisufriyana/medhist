@@ -3,9 +3,10 @@
 #' This function transforms each medical history from day interval to binary
 #' one. If there is no record, then the value is 0; otherwise, the value is 1.
 #'
-#' @param tidy_set A TidySet (i.e. ExpressionSet) containing the visits of subjects in
-#' outcome dataset, paid by any payment systems. This TidySet also accomodates
-#' outcome dataset. This is an output of \code{compile_mh_outcome()}.
+#' @param tidy_set A TidySet (i.e. ExpressionSet) containing the visits of 
+#' subjects in outcome dataset, paid by any payment systems. This TidySet also 
+#' accomodates outcome dataset. This is an output of 
+#' \code{compile_mh_outcome()}.
 #' @param verbose Verbosity, a logical indicating whether progress should be
 #' shown.
 #'
