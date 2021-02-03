@@ -7,9 +7,10 @@
 trans_binary(tidy_set, verbose = T)
 }
 \arguments{
-\item{tidy_set}{A TidySet (i.e. ExpressionSet) containing the visits of subjects in
-outcome dataset, paid by any payment systems. This TidySet also accomodates
-outcome dataset. This is an output of \code{compile_mh_outcome()}.}
+\item{tidy_set}{A TidySet (i.e. ExpressionSet) containing the visits of
+subjects in outcome dataset, paid by any payment systems. This TidySet also
+accomodates outcome dataset. This is an output of
+\code{compile_mh_outcome()}.}
 
 \item{verbose}{Verbosity, a logical indicating whether progress should be
 shown.}

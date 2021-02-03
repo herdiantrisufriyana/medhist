@@ -35,7 +35,8 @@ shown.}
 A TidySet (i.e. ExpressionSet) containing the visits of subjects in
 medical history and the outcome datasets. Since a code may be encountered
 before \code{db_start_date}, the value returns NA to denote censored data.
-This is accounted for Kaplan-Meier estimation.
+This is accounted for Kaplan-Meier estimation. Historical rate table can be
+accessed using \code{preproc()} function from Biobase package.
 }
 \description{
 This function transforms each medical history from day interval to a rate by

@@ -7,10 +7,10 @@
 extract_outcome(
   population,
   icd10_event,
-  latest_event = first,
+  latest_event = min,
   day_to_event = -1,
   icd10_nonevent,
-  latest_nonevent = last,
+  latest_nonevent = max,
   day_to_nonevent = 0,
   verbose = T
 )
@@ -31,9 +31,8 @@ the code with more than k-mer will be extracted.}
 \code{admission_date} with the \code{icd10_event} among many for each
 subject. This date will be adjusted with \code{day_to_event} to limit visits
 accounted for medical histories, since these are considerably before the
-outcome. The function is conceivably \code{first()} or \code{last()} from
-\code{dplyr} package, preferably \code{first()}. This may be respectively
-\code{min()} or \code{max()} if using base R.}
+outcome. The function is conceivably \code{min()} and \code{max()} for the
+earliest (preferred) and latest date, respectively.}
 
 \item{day_to_event}{Day to event, an integer to adjust \code{latest_event}
 for limiting visits accounted for medical histories. These are considerably
@@ -50,9 +49,8 @@ sequence; thus, the code with more than k-mer will be extracted.}
 \code{admission_date} with the \code{icd10_nonevent} among many for each
 subject. This date will be adjusted with \code{day_to_nonevent} to limit
 visits accounted for medical histories, since these are considerably up to
-the day of the outcome. The function is conceivably \code{first()} or
-\code{last()} from \code{dplyr} package, preferably \code{last()}. This may
-be respectively \code{min()} or \code{max()} if using base R.}
+the day of the outcome. The function is conceivably \code{min()} and
+\code{max()} for the earliest and latest date (preferred), respectively.}
 
 \item{day_to_nonevent}{Day to non-event, an integer to adjust
 \code{latest_nonevent} for limiting visits accounted for medical histories.
@@ -101,6 +99,6 @@ population=
   .[!duplicated(.),]
 
 ## Extract outcome of subjects
-outcome=extract_outcome(population,'O1[4-5]',first,-1,'Z3[3-7]',last,0)
+outcome=extract_outcome(population,'O1[4-5]',min,-1,'Z3[3-7]',max,0)
 }
 \keyword{outcome}
