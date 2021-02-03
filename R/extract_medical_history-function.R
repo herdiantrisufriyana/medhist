@@ -56,7 +56,7 @@
 #'
 #' ## Extract outcome of subjects and sample some of them
 #' outcome=
-#'   extract_outcome(population,'O1[4-5]',first,-1,'Z3[3-7]',last,0) %>%
+#'   extract_outcome(population,'O1[4-5]',min,-1,'Z3[3-7]',max,0) %>%
 #'   group_by(outcome) %>%
 #'   slice(sample(seq(n()),ceiling(n()*0.0125),F)) %>%
 #'   ungroup()
