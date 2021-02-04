@@ -41,7 +41,7 @@ population=
 ## Determine outcome
 outcome=
   population %>%
-  extract_outcome('O1[4-5]',first,-1,'Z3[3-7]',last,0)
+  extract_outcome('O1[4-5]',min,-1,'Z3[3-7]',max,0)
 
 set.seed(33)
 outcome=
