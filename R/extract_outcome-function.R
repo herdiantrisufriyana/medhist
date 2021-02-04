@@ -117,10 +117,16 @@ extract_outcome=function(population
   
   
   if(verbose) setpb(pb,4)
-  nonevent=
-    population %>%
-    filter(!subject_id%in%event$subject_id) %>%
-    filter(str_detect(code,icd10_nonevent))
+  if(icd10_nonevent==''){
+    nonevent=
+      population %>%
+      filter(!subject_id%in%event$subject_id)
+  }else{
+    nonevent=
+      population %>%
+      filter(!subject_id%in%event$subject_id) %>%
+      filter(str_detect(code,icd10_nonevent))
+  }
   
   if(verbose) setpb(pb,5)
   nonevent=
