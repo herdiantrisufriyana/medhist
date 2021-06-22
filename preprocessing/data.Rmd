@@ -1,0 +1,1966 @@
+---
+title: 'Data cleaning for cross-sectional sample of the BPJS Kesehatan database
+    second edition'
+author:
+  - name: Herdiantri Sufriyana
+    affiliation:
+    - &gibi Graduate Institute of Biomedical Informatics, College of Medical
+      Science and Technology, Taipei Medical University, Taipei, Taiwan
+    - Department of Medical Physiology, College of Medicine, University of
+      Nahdlatul Ulama Surabaya, Surabaya, Indonesia
+    email: herdiantrisufriyana@unusa.ac.id
+  - name: Yu-Wei Wu
+    affiliation:
+    - *gibi
+    - &tmuh Clinical Big Data Research Center, Taipei Medical University
+      Hospital, Taipei, Taiwan
+  - name: Emily Chia-Yu Su
+    affiliation:
+    - *gibi
+    - *tmuh
+    - Research Center for Artificial Intelligence in Medicine, Taipei Medical
+      University, Taipei, Taiwan
+output: pdf_document
+---
+
+\tableofcontents
+\newpage
+\listoffigures
+\listoftables
+\newpage
+
+# Programming environment
+
+```{r Install and set specific version of Bioconductor, include=FALSE}
+# Install devtools to install specific version of BiocManager
+if(!require(devtools)) install.packages('devtools')
+
+# Install specific version of BiocManager and Bioconductor
+if(!require(BiocManager) | packageVersion('BiocManager')!='1.30.10'){
+  devtools::install_version('BiocManager',version='1.30.10')
+}
+if(version()!='3.11') install(version='3.11',update=TRUE,ask=FALSE)
+
+# Unload devtools & BiocManager to prevent overlapped functions with others
+detach('package:devtools',unload=T)
+detach('package:BiocManager',unload=T)
+```
+
+```{r Install and load packages with specific version, include=FALSE}
+check_install_load=function(pkg,version,repo=c('cran','bioc','github'),load=T){
+  if(pkg%in%installed.packages()[,1]){
+    if(packageVersion(pkg)==version){
+      is.install=FALSE
+    }else{
+      is.install=TRUE
+    }
+  }else{
+    is.install=TRUE
+  }
+  if(is.install){
+    if(repo=='cran'){
+      install.packages(pkg)
+    }else if(repo=='bioc'){
+      BiocManager::install(pkg,update=F)
+    }else{
+      devtools::install_github(paste0(repo,'/',pkg),upgrade=F)
+    }
+  }
+  if(load)library(pkg,character.only=T)
+}
+
+check_install_load('foreign','0.8.80',repo='bioc',load=F)
+check_install_load('data.table','1.13.0',repo='bioc')
+check_install_load('tidyverse','1.3.0',repo='bioc')
+options(dplyr.summarise.inform=FALSE)
+check_install_load('lubridate','1.7.9',repo='bioc')
+check_install_load('dslabs','0.7.3',repo='bioc',load=F)
+dslabs::ds_theme_set()
+check_install_load('pbapply','1.4.3',repo='bioc')
+check_install_load('medhist','0.1.0',repo='herdiantrisufriyana')
+devtools::load_all('../../medhist')
+check_install_load('parallel','4.0.2',repo='bioc')
+check_install_load('BiocGenerics','0.34.0',repo='bioc')
+check_install_load('Biobase','2.48.0',repo='bioc')
+```
+
+```{r Show session info}
+sessionInfo()
+```
+
+# From original to clean data
+
+```{r Convert original SPSS file to CSV file, include=FALSE}
+from_sav_to_csv=function(path_from,path_to,columns=NULL){
+  if(is.null(columns)){
+    foreign::read.spss(
+        path_from
+        ,use.value.labels=T
+        ,max.value.labels=Inf
+        ,reencode=F
+        ,use.missings=T
+        ,add.undeclared.levels='append'
+        ,duplicated.value.labels='append'
+      ) %>%
+      data.frame() %>%
+      as.data.table() %>%
+      write_csv(path_to)
+  }else{
+    foreign::read.spss(
+        path_from
+        ,use.value.labels=T
+        ,max.value.labels=Inf
+        ,reencode=F
+        ,use.missings=T
+        ,add.undeclared.levels='append'
+        ,duplicated.value.labels='append'
+      ) %>%
+      .[columns] %>%
+      data.frame() %>%
+      as.data.table() %>%
+      write_csv(path_to)
+  }
+}
+
+from_sav_to_csv('data/01 Kepesertaan 260819.sav','data/pstv.csv',1:15)
+from_sav_to_csv('data/02 FKTP Kapitasi 260819.sav','data/fkp.csv')
+from_sav_to_csv('data/03 FKTP Non Kapitasi 260819.sav','data/pnk.csv')
+from_sav_to_csv('data/04 FKRTL 260819.sav','data/fkl.csv')
+from_sav_to_csv('data/05 FKRTL Diagnosis Sekunder 260819.sav','data/fkl2.csv')
+```
+
+```{r Create a container list of original data, include=FALSE}
+bpjskes=list()
+```
+
+```{r Create an annotation table based on the dataset code book, include=FALSE}
+bpjskes$column=
+  matrix(
+    c(
+      'code','description','variable_name','class'
+      
+      ,'PSTV01','Nomer peserta','subject_id','c'
+      ,'PSTV02','Nomer kepala keluarga','householder_id','c'
+      ,'PSTV03','Tanggal lahir','birth_date','d'
+      ,'PSTV04','Hubungan keluarga','family_status','c'
+      ,'PSTV05','Jenis kelamin','sex','c'
+      ,'PSTV06','Status kawin','marital_status','c'
+      ,'PSTV07','Kelas rawat','insurance_class','c'
+      ,'PSTV08','Segmen peserta','occupation_segment','c'
+      ,'PSTV09','Provinsi peserta','subject_province','c'
+      ,'PSTV10','Kabupaten/kota peserta','subject_city','c'
+      ,'PSTV11','Kepemilikan faskes','healthcare_holder','c'
+      ,'PSTV12','Jenis faskes','healthcare_type','c'
+      ,'PSTV13','Provinsi faskes','healthcare_province','c'
+      ,'PSTV14','Kabupaten/kota faskes','healthcare_city','c'
+      ,'PSTV15','Bobot peserta','sampling_weight','d'
+      
+      ,'FKP02','Nomer kunjungan','visit_id','c'
+      ,'FKP03','Tanggal datang','admission_date','d'
+      ,'FKP04','Tanggal pulang','discharge_date','d'
+      ,'FKP05','Provinsi faskes','healthcare_province','c'
+      ,'FKP06','Kabupaten/kota faskes','healthcare_city','c'
+      ,'FKP07','Kepemilikan faskes','healthcare_holder','c'
+      ,'FKP08','Jenis faskes','healthcare_type','c'
+      ,'FKP09','Tipe faskes','healthcare_category','c'
+      ,'FKP10','Tingkat faskes','healthcare_level','c'
+      ,'FKP11','Bagian faskes','healthcare_department','c'
+      ,'FKP12','Segmen peserta','occupation segment','c'
+      ,'FKP13','Status pulang','discharge_status','c'
+      ,'FKP14','Kode dan deskripsi ICD-10 3 digit','icd10_3mer_desc','c'
+      ,'FKP15','Kode ICD-10','icd10_code','c'
+      ,'FKP15A','Deskripsi ICD-10','icd10_desc','c'
+      ,'FKP150','Kosong 0','empty0','l'
+      ,'FKP151','Kosong 1','empty1','l'
+      ,'FKP16','Provinsi rujukan','referral_province','c'
+      ,'FKP17','Kabupaten/kota rujukan','referral_city','c'
+      ,'FKP18','Kepemilikan rujukan','referral_holder','c'
+      ,'FKP19','Jenis rujukan','referral_type','c'
+      ,'FKP20','Tipe rujukan','referral_category','c'
+      ,'FKP21','Bagian rujukan ','referral_department','c'
+      ,'FKP22','Jenis kunjungan ','visit_type','c'
+      
+      ,'PNK02','Nomer kunjungan','visit_id','c'
+      ,'PNK03','Tanggal datang','admission_date','d'
+      ,'PNK04','Tanggal tindakan','procedure_date','d'
+      ,'PNK05','Tanggal pulang','discharge_date','d'
+      ,'PNK06','Provinsi faskes','healthcare_province','c'
+      ,'PNK07','Kabupaten/kota faskes','healthcare_city','c'
+      ,'PNK08','Kepemilikan faskes','healthcare_holder','c'
+      ,'PNK09','Jenis faskes','healthcare_type','c'
+      ,'PNK10','Tipe faskes','healthcare_category','c'
+      ,'PNK11','Tingkat faskes','healthcare_level','c'
+      ,'PNK12','Segmen peserta','occupation segment','c'
+      ,'PNK13','Kode dan deskripsi ICD-10 3 digit','icd10_3mer_desc','c'
+      ,'PNK14','Kode ICD-10','icd10_code','c'
+      ,'PNK15','Deskripsi ICD-10','icd10_desc','c'
+      ,'PNK150','Kosong 0','empty0','l'
+      ,'PNK16','Deskripsi tindakan','procedure_desc','c'
+      ,'PNK17','Biaya tagih','claimed_cost','d'
+      ,'PNK18','Biaya terverifikasi','verified_cost','d'
+      
+      ,'FKL02','Nomer kunjungan','visit_id','c'
+      ,'FKL03','Tanggal datang','admission_date','d'
+      ,'FKL04','Tanggal pulang','discharge_date','d'
+      ,'FKL05','Provinsi faskes','healthcare_province','c'
+      ,'FKL06','Kabupaten/kota faskes','healthcare_city','c'
+      ,'FKL07','Kepemilikan faskes','healthcare_holder','c'
+      ,'FKL08','Jenis faskes','healthcare_type','c'
+      ,'FKL09','Tipe faskes','healthcare_category','c'
+      ,'FKL10','Tingkat faskes','healthcare_level','c'
+      ,'FKL11','Bagian faskes','healthcare_department','c'
+      ,'FKL12','Segmen peserta','occupation segment','c'
+      ,'FKL13','Kelas rawat','healthcare_class','c'
+      ,'FKL14','Status pulang','discharge_status','c'
+      ,'FKL15','Kode dan deskripsi ICD-10 3 digit datang'
+          ,'admission_icd10_3mer_desc','c'
+      ,'FKL16','Kode ICD-10 datang','admission_icd10_code','c'
+      ,'FKL16A','Deskripsi ICD-10 datang','admission_icd10_desc','c'
+      ,'FKL160','Kosong 0 datang','admission_empty0','l'
+      ,'FKL161','Kosong 1 datang','admission_empty1','l'
+      ,'FKL17','Kode dan deskripsi ICD-10 3 digit primer (pulang)'
+          ,'primary_icd10_3mer_desc','c'
+      ,'FKL18','Kode ICD-10 primer (pulang)','primary_icd10_code','c'
+      ,'FKL18A','Deskripsi ICD-10 primer (pulang)','primary_icd10_desc','c'
+      ,'FKL180','Kosong 0 primer (pulang)','primary_empty0','l'
+      ,'FKL19','Kode INA-CBGs','cbg_code','c'
+      ,'FKL19A','Deskripsi INA-CBGs dari ICD10','cbg_icd10_desc','c'
+      ,'FKL20','Deskripsi INA-CBGs dari case main groups (CMGs)'
+          ,'cbg_cmg_desc','c'
+      ,'FKL21','Deskripsi INA-CBGs dari case groups (CGs)','cbg_cg_desc','c'
+      ,'FKL22','Deskripsi INA-CBGs dari case type','cbg_ct_desc','c'
+      ,'FKL23','Deskripsi INA-CBGs dari resource intensity level'
+          ,'cbg_ril_desc','c'
+      ,'FKL24','Kode ICD-10 sekunder (datang dan selama rawat)'
+          ,'secondary_icd10_code','c'
+      ,'FKL24_A'
+          ,'Kode dan deskripsi ICD-10 3 digit sekunder (datang & selama rawat)'
+          ,'secondary_icd10_3mer_desc','c'
+      ,'FKL25','Provinsi rujukan','referral_province','c'
+      ,'FKL26','Kabupaten/kota rujukan','referral_city','c'
+      ,'FKL27','Kepemilikan rujukan','referral_holder','c'
+      ,'FKL28','Jenis rujukan','referral_type','c'
+      ,'FKL29','Tipe rujukan','referral_category','c'
+      ,'FKL30','Kode dan deskripsi ICD-9','icd9_code_desc','c'
+      ,'FKL300','Kode dan deskripsi ICD-9 lanjutan 0','icd9_code_desc0','c'
+      ,'FKL301','Kode dan deskripsi ICD-9 lanjutan 1','icd9_code_desc1','c'
+      ,'FKL302','Kode dan deskripsi ICD-9 lanjutan 2','icd9_code_desc2','c'
+      ,'FKL303','Kode dan deskripsi ICD-9 lanjutan 3','icd9_code_desc3','c'
+      ,'FKL304','Kode dan deskripsi ICD-9 lanjutan 4','icd9_code_desc4','c'
+      ,'FKL305','Kosong 5','empty5','l'
+      ,'FKL306','Kosong 6','empty6','l'
+      ,'FKL307','Kosong 7','empty7','l'
+      ,'FKL308','Kosong 8','empty8','l'
+      ,'FKL309','Kosong 9','empty9','l'
+      ,'FKL30A','Kosong A','emptyA','l'
+      ,'FKL30B','Kosong B','emptyB','l'
+      ,'FKL30C','Kosong C','emptyC','l'
+      ,'FKL30D','Kosong D','emptyD','l'
+      ,'FKL30E','Kosong E','emptyE','l'
+      ,'FKL30F','Kosong F','emptyF','l'
+      ,'FKL30G','Kosong G','emptyG','l'
+      ,'FKL31','Wilayah pengelolaan','region','c'
+      ,'FKL32','Tarif case-based groups (CBGs)','cbg_tariff','d'
+      ,'FKL33','Kode special sub-acute (SA) groups','sa_code','c'
+      ,'FKL34','Tarif special sub-acute (SA) groups','sa_tariff','d'
+      ,'FKL35','Kode special procedures (SP)','sp_code','c'
+      ,'FKL36','Deskripsi special procedures (SP)','sp_desc','c'
+      ,'FKL37','Tarif special procedures (SP)','sp_tariff','d'
+      ,'FKL38','Kode special prosthesis (RR)','rr_code','c'
+      ,'FKL39','Deskripsi special prosthesis (RR)','rr_desc','c'
+      ,'FKL40','Tarif special prosthesis (RR)','rr_tariff','d'
+      ,'FKL41','Kode special investigation (SI)','si_code','c'
+      ,'FKL42','Deskripsi special investigation (SI)','si_desc','c'
+      ,'FKL43','Tarif special investigation (SI)','si_tariff','d'
+      ,'FKL44','Kode special drugs (SD)','sd_code','c'
+      ,'FKL45','Deskripsi special drugs (SD)','sd_desc','c'
+      ,'FKL46','Tarif special drugs (SD)','sd_tariff','d'
+      ,'FKL47','Biaya tagih (CBGs+SA+SP+RR+SI+SD)','claimed_cost','d'
+      ,'FKL48','Biaya terverifikasi','verified_cost','d'
+    ),
+    ncol=4,byrow=T
+  ) %>%
+  `dimnames<-`(list(.[,1],.[1,])) %>%
+  .[-1,-1] %>%
+  data.frame()
+```
+
+
+```{r Read CSV files of the original data, include=FALSE}
+bpjskes$ori$pstv=data.frame(foreign::read.spss(
+  'data/01 Kepesertaan 260819.sav'
+  ,use.value.labels=F,reencode=F
+))
+bpjskes$colset$pstv=colnames(bpjskes$ori$pstv)[1:(ncol(bpjskes$ori$pstv)-2)]
+bpjskes$proc$pstv=
+  read_csv(
+    'data/pstv.csv'
+    ,skip=1
+    ,col_names=bpjskes$column[bpjskes$colset$pstv,'variable_name']
+    ,col_types=paste0(bpjskes$column[bpjskes$colset$pstv,'class'],collapse='')
+  )
+
+bpjskes$ori$fkp=data.frame(foreign::read.spss(
+  'data/02 FKTP Kapitasi 260819.sav'
+  ,use.value.labels=F,reencode=F
+))
+bpjskes$colset$fkp=colnames(bpjskes$ori$fkp)
+bpjskes$proc$fkp=
+  read_csv(
+    'data/fkp.csv'
+    ,skip=1
+    ,col_names=bpjskes$column[bpjskes$colset$fkp,'variable_name']
+    ,col_types=paste0(bpjskes$column[bpjskes$colset$fkp,'class'],collapse='')
+  )
+
+bpjskes$ori$pnk=data.frame(foreign::read.spss(
+  'data/03 FKTP Non Kapitasi 260819.sav'
+  ,use.value.labels=F,reencode=F
+))
+bpjskes$colset$pnk=colnames(bpjskes$ori$pnk)
+bpjskes$proc$pnk=
+  read_csv(
+    'data/pnk.csv'
+    ,skip=1
+    ,col_names=bpjskes$column[bpjskes$colset$pnk,'variable_name']
+    ,col_types=paste0(bpjskes$column[bpjskes$colset$pnk,'class'],collapse='')
+  )
+
+bpjskes$ori$fkl=data.frame(foreign::read.spss(
+  'data/04 FKRTL 260819.sav'
+  ,use.value.labels=F,reencode=F
+))
+bpjskes$colset$fkl=colnames(bpjskes$ori$fkl)
+bpjskes$proc$fkl=
+  read_csv(
+    'data/fkl.csv'
+    ,skip=1
+    ,col_names=bpjskes$column[bpjskes$colset$fkl,'variable_name']
+    ,col_types=paste0(bpjskes$column[bpjskes$colset$fkl,'class'],collapse='')
+  )
+
+bpjskes$ori$fkl2=data.frame(foreign::read.spss(
+  'data/05 FKRTL Diagnosis Sekunder 260819.sav'
+  ,use.value.labels=F,reencode=F
+))
+bpjskes$colset$fkl2=colnames(bpjskes$ori$fkl2)
+bpjskes$proc$fkl2=
+  read_csv(
+    'data/fkl2.csv'
+    ,skip=1
+    ,col_names=bpjskes$column[bpjskes$colset$fkl2,'variable_name']
+    ,col_types=paste0(bpjskes$column[bpjskes$colset$fkl2,'class'],collapse='')
+  )
+```
+
+```{r Standardize date format, include=FALSE}
+bpjskes$date=function(date_number){
+  as_date(as.POSIXct(date_number,tz='Asia/Jakarta',origin='1582-10-14'))
+}
+
+bpjskes$proc=
+  bpjskes$proc %>%
+  lapply(function(x){
+    mutate_at(x,colnames(x) %>% .[str_detect(.,'date')],bpjskes$date)
+  })
+```
+
+```{r Creaate a function to make a coding table, include=FALSE}
+bpjskes$level=function(column_name,proc_db){
+  cbind(
+      data.frame(variable_name=column_name)
+      ,proc_db %>%
+        lapply(function(x){
+          if(column_name %in% colnames(x)) x %>%
+            select_at(column_name)
+          else NULL
+        }) %>%
+        do.call(rbind,.)
+    ) %>%
+    .[!duplicated(.),] %>%
+    `rownames<-`(NULL) %>%
+    rename_at(column_name,function(colname)'from')
+}
+```
+
+```{r Change column names then make coding tables in English, include=FALSE}
+bpjskes$sf=
+  bpjskes$column %>%
+  filter(!str_detect(
+    variable_name
+    ,'_id|_date|_province|_city|empty|icd|cbg|^[:alpha:]{2}_|_desc|_department')
+     & class!='d'
+  ) %>%
+  rownames_to_column(var='table')
+
+bpjskes$sf=
+  setNames(bpjskes$sf$variable_name,bpjskes$sf$table) %>%
+  pblapply(bpjskes$level,bpjskes$proc)
+
+bpjskes$sf[[1]]=
+  bpjskes$sf[[1]] %>%
+  cbind(data.frame(
+    to=c('child','person','wife','other','husband')
+  ))
+
+bpjskes$sf[[2]]=
+  bpjskes$sf[[2]] %>%
+  cbind(data.frame(
+    to=c('female','male','unspecified')
+  ))
+
+bpjskes$sf[[3]]=
+  bpjskes$sf[[3]] %>%
+  cbind(data.frame(
+    to=c('unspecified','single','married','divorced/widowed')
+  ))
+
+bpjskes$sf[[4]]=
+  bpjskes$sf[[4]] %>%
+  cbind(data.frame(
+    to=c('third','second','first',NA)
+  ))
+
+bpjskes$sf[[5]]=
+  bpjskes$sf[[5]] %>%
+  cbind(data.frame(
+    to=c('central-government-paid householder'
+         ,'employee householder'
+         ,'local-government-paid householder'
+         ,'unemployed householder'
+         ,'employer householder')
+  ))
+
+bpjskes$sf[[6]]=
+  bpjskes$sf[[6]] %>%
+  cbind(data.frame(
+    to=c('city local government'
+         ,'navy'
+         ,'private company'
+         ,'police'
+         ,'army'
+         ,'state-owned company'
+         ,NA
+         ,'air force'
+         ,'province local government'
+         ,'central government')
+  ))
+
+bpjskes$sf[[7]]=
+  bpjskes$sf[[7]] %>%
+  cbind(data.frame(
+    to=c('public health center'
+         ,'primary care clinic'
+         ,'primary care physician'
+         ,'primary care physician'
+         ,'primary care clinic'
+         ,'primary care dentist'
+         ,'public health center'
+         ,'laboratory'
+         ,'other'
+         ,'laboratory'
+         ,'other'
+         ,'hospital'
+         ,'specialty care clinic')
+  ))
+
+bpjskes$sf[[8]]=
+  bpjskes$sf[[8]] %>%
+  left_join(select(bpjskes$sf[[6]],from,to),by='from')
+
+bpjskes$sf[[9]]=
+  bpjskes$sf[[9]] %>%
+  left_join(select(bpjskes$sf[[7]],from,to),by='from')
+
+bpjskes$sf[[10]]=
+  bpjskes$sf[[10]] %>%
+  cbind(data.frame(
+    to=c('primary care physician'
+         ,'primary care clinic, outpatient'
+         ,'primary care dentist'
+         ,'outpatient'
+         ,'inpatient'
+         ,'primary care clinic, inpatient'
+         ,'laboratory'
+         ,'primary care clinic, type-D hospital on a par'
+         ,'IVA/PAP smear center'
+         ,'special claim'
+         ,'other'
+         ,'inpatient'
+         ,'outpatient'
+         ,'primary care clinic, outpatient'
+         ,'primary care physician'
+         ,'primary care clinic, inpatient'
+         ,'laboratory'
+         ,'type-D hospital, primary care'
+         ,'IVA/PAP smear center'
+         ,'special claim'
+         ,'other'
+         ,'type-C hospital'
+         ,'type-D hospital'
+         ,'type-B hospital, on a par'
+         ,'type-A hospital'
+         ,'type-C hospital, on a par'
+         ,'specialty care hospital, pulmonology'
+         ,'specialty care hospital, oncology'
+         ,'type-B hospital'
+         ,'specialty care hospital, maternal and child'
+         ,'type-D hospital, on a par'
+         ,'police/military hospital, level 2'
+         ,'police/military hospital, level 3'
+         ,'specialty care hospital, ophtalmology'
+         ,'specialty care hospital, psychiatry'
+         ,'specialty care hospital, leprosy'
+         ,'police/military hospital, level 4'
+         ,NA
+         ,'specialty care hospital, cardiology'
+         ,'specialty care hospital, other'
+         ,'specialty care hospital, dentistry and oral medicine'
+         ,'police/military hospital, level 1'
+         ,'specialty care hospital, orthopedic'
+         ,'specialty care hospital, surgery'
+         ,'specialty care hospital, neurology'
+         ,'hospital, non-emergency provider'
+         ,'type-A hospital, on a par'
+         ,'hemodialysis center')
+  ))
+
+bpjskes$sf[[11]]=
+  bpjskes$sf[[11]] %>%
+  cbind(data.frame(
+    to=c('primary care, outpatient'
+         ,'primary care, inpatient'
+         ,'promotive care'
+         ,'primary care, inpatient'
+         ,'primary care, outpatient'
+         ,'promotive care'
+         ,'secondary/tertiary care, inpatient'
+         ,'secondary/tertiary care, outpatient')
+  ))
+
+bpjskes$sf[[12]]=
+  bpjskes$sf[[12]] %>%
+  left_join(select(bpjskes$sf[[5]],from,to),by='from') %>%
+  mutate(to=ifelse(from=='BUKAN PEKERJA','unemployed householder',to))
+
+bpjskes$sf[[13]]=
+  bpjskes$sf[[13]] %>%
+  cbind(data.frame(
+    to=c('return for outpatient services'
+         ,'transferred to higher-level care'
+         ,'discharged to home'
+         ,'transferred within this facility'
+         ,'left against medical advice or discontinued care'
+         ,'other'
+         ,NA
+         ,'expired'
+         ,'discharged to home'
+         ,'transferred to other facility'
+         ,'expired, place unknown')
+  ))
+
+bpjskes$sf[[14]]=
+  bpjskes$sf[[14]] %>%
+  left_join(select(bpjskes$sf[[6]],from,to),by='from')
+
+bpjskes$sf[[15]]=
+  bpjskes$sf[[15]] %>%
+  left_join(select(bpjskes$sf[[7]],from,to),by='from') %>%
+  mutate(
+    to=case_when(
+      from=='APOTIK'~'pharmacy'
+      ,from=='OPTIK'~'optical'
+      ,from=='KLINIK PERTAMA'~'primary care clinic'
+      ,from=='PEMERINTAH'~'state-owned healthcare'
+      ,from=='PMI'~'blood bank'
+      ,TRUE~to
+    )
+  )
+
+bpjskes$sf[[16]]=
+  bpjskes$sf[[16]] %>%
+  left_join(select(bpjskes$sf[[10]],from,to),by='from') %>%
+  mutate(
+    to=case_when(
+      from=='APOTIK PRB DAN KRONIS'~'pharmacy, general'
+      ,from=='RS NON PROVIDER (GAWATDARURAT)'~'hospital, non-emergency provider'
+      ,from=='OPTIK'~'optical'
+      ,from=='DOKTER PRAKTER PERORANGAN'~'primary care physician'
+      ,from=='RS COB'~'hospital, coordination of benefit'
+      ,from=='APOTIK KRONIS'~'pharmacy, chronic'
+      ,from=='KHUSUS KANKER (ONKOLOGI)'~'specialty care hospital, oncology'
+      ,from=='PMI'~'blood bank'
+      ,from=='PPK TIDAK DITUNJUK'~'non-provider facility'
+      ,from=='NON PROVIDER GAWATDARURAT'~'hospital, non-emergency provider'
+      ,from=='PPK PELAYANAN CAPD'~'CAPD center'
+      ,from=='PPK LUAR WILAYAH'~'out-of-region facility'
+      ,TRUE~to
+    )
+  )
+
+bpjskes$sf[[17]]=
+  bpjskes$sf[[17]] %>%
+  cbind(data.frame(to=c('healthy visitation','ill visitation')))
+
+bpjskes$sf[[18]]=
+  bpjskes$sf[[18]] %>%
+  left_join(select(bpjskes$sf[[6]],from,to),by='from')
+
+bpjskes$sf[[19]]=
+  bpjskes$sf[[19]] %>%
+  left_join(select(bpjskes$sf[[7]],from,to),by='from')
+
+bpjskes$sf[[20]]=
+  bpjskes$sf[[20]] %>%
+  left_join(select(bpjskes$sf[[10]],from,to),by='from')
+
+bpjskes$sf[[21]]=
+  bpjskes$sf[[21]] %>%
+  left_join(select(bpjskes$sf[[11]],from,to),by='from')
+
+bpjskes$sf[[22]]=
+  bpjskes$sf[[22]] %>%
+  left_join(select(bpjskes$sf[[12]],from,to),by='from')
+
+bpjskes$sf[[23]]=
+  bpjskes$sf[[23]] %>%
+  left_join(select(bpjskes$sf[[6]],from,to),by='from')
+
+bpjskes$sf[[24]]=
+  bpjskes$sf[[24]] %>%
+  left_join(select(bpjskes$sf[[7]],from,to),by='from')
+
+bpjskes$sf[[25]]=
+  bpjskes$sf[[25]] %>%
+  left_join(select(bpjskes$sf[[10]],from,to),by='from')
+
+bpjskes$sf[[26]]=
+  bpjskes$sf[[26]] %>%
+  left_join(select(bpjskes$sf[[11]],from,to),by='from')
+
+bpjskes$sf[[27]]=
+  bpjskes$sf[[27]] %>%
+  left_join(select(bpjskes$sf[[12]],from,to),by='from')
+
+bpjskes$sf[[28]]=
+  bpjskes$sf[[28]] %>%
+  left_join(select(bpjskes$sf[[4]],from,to),by='from')
+
+bpjskes$sf[[29]]=
+  bpjskes$sf[[29]] %>%
+  left_join(select(bpjskes$sf[[13]],from,to),by='from')
+
+bpjskes$sf[[30]]=
+  bpjskes$sf[[30]] %>%
+  left_join(select(bpjskes$sf[[6]],from,to),by='from')
+
+bpjskes$sf[[31]]=
+  bpjskes$sf[[31]] %>%
+  left_join(select(bpjskes$sf[[15]],from,to),by='from')
+
+bpjskes$sf[[32]]=
+  bpjskes$sf[[32]] %>%
+  left_join(select(bpjskes$sf[[16]],from,to),by='from')
+
+bpjskes$sf[[33]]=
+  bpjskes$sf[[33]] %>%
+  cbind(data.frame(to=paste0('region',c(3,1,4,2,5))))
+```
+
+```{r Recode original dataset based on the coding tables, include=FALSE}
+bpjskes$proc=
+  bpjskes$proc %>%
+  lapply(X=seq(length(.)),Y=.,function(X,Y){
+    
+    lapply(X=seq(ncol(Y[[X]]))
+           ,Y=Y[[X]]
+           ,Z=str_to_upper(str_remove_all(names(Y)[X],'\\d+'))
+           ,FUN=function(X,Y,Z){
+      
+        K=bpjskes$sf %>%
+          .[str_detect(names(.),Z)] %>%
+          sapply(function(x)x$variable_name[1])
+        
+        if(colnames(Y)[X] %in% K){
+          L=bpjskes$sf %>%
+            .[str_detect(names(.),Z)] %>%
+            .[[which(sapply(.,function(x)x$variable_name[1]==colnames(Y)[X]))]]
+          
+          select_at(Y,X) %>%
+            setNames('from') %>%
+            left_join(L,by='from') %>%
+            select(to) %>%
+            setNames(colnames(Y)[X])
+        }else{
+          select_at(Y,X)
+        }
+      
+      }) %>%
+      do.call(cbind,.)
+    
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Make tables for province correction, include=FALSE}
+bpjskes$province=
+  bpjskes$column %>%
+  filter(str_detect(variable_name,'_province')) %>%
+  rownames_to_column(var='table')
+
+bpjskes$province=
+  setNames(bpjskes$province$variable_name,bpjskes$province$table) %>%
+  pblapply(bpjskes$level,bpjskes$proc)
+
+bpjskes$province=
+  bpjskes$province %>%
+  lapply(function(x){
+    x %>%
+      mutate(
+        to=
+          from %>%
+          str_to_upper() %>%
+          str_replace_all('\\.\\s?','\\. ') %>%
+          str_replace_all('\\.','')
+        ,to=ifelse(to%in%c('MISSING','TIDAK DIRUJUK','BUKAN RUJUKAN'),NA,to)
+        ,to=ifelse(to%in%c('LUAR NEGERI'),'LUAR NEGERI/LAINNYA',to)
+        ,to=ifelse(to%in%c('LAIN-LAIN/LUAR NEGERI'),'LUAR NEGERI/LAINNYA',to)
+      ) %>%
+      .[!duplicated(.),]
+  })
+```
+
+```{r Make correction for the province names, include=FALSE}
+bpjskes$proc=
+  bpjskes$proc %>%
+  lapply(X=seq(length(.)),Y=.,function(X,Y){
+    
+    lapply(X=seq(ncol(Y[[X]]))
+           ,Y=Y[[X]]
+           ,Z=str_to_upper(str_remove_all(names(Y)[X],'\\d+'))
+           ,FUN=function(X,Y,Z){
+      
+        K=bpjskes$province %>%
+          .[str_detect(names(.),Z)] %>%
+          sapply(function(x)x$variable_name[1])
+        
+        if(colnames(Y)[X] %in% K){
+          L=bpjskes$province %>%
+            .[str_detect(names(.),Z)] %>%
+            .[[which(sapply(.,function(x)x$variable_name[1]==colnames(Y)[X]))]]
+          
+          select_at(Y,X) %>%
+            setNames('from') %>%
+            left_join(L,by='from') %>%
+            select(to) %>%
+            setNames(colnames(Y)[X])
+        }else{
+          select_at(Y,X)
+        }
+        
+      }) %>%
+      do.call(cbind,.)
+    
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Make tables for city correction, include=FALSE}
+bpjskes$city=
+  bpjskes$column %>%
+  filter(str_detect(variable_name,'_city')) %>%
+  rownames_to_column(var='table')
+
+bpjskes$city=
+  setNames(bpjskes$city$variable_name,bpjskes$city$table) %>%
+  pblapply(bpjskes$level,bpjskes$proc)
+
+bps_2017=
+  readxl::read_xlsx('data/bps_city_2017_sem_1.xlsx') %>%
+  mutate(
+    bps_city=if_else(bps_city=='S I A K','Siak',bps_city)
+  ) %>%
+  mutate(
+    bps_city=
+      paste0(ifelse(
+        str_detect(str_to_lower(kemendagri_city),'kab\\.')
+        ,'Kab. ','Kota '
+      ),bps_city)
+  ) %>%
+  select(bps_city) %>%
+  .[!duplicated(.),] %>%
+  mutate(
+    bps_city=
+      bps_city %>%
+      str_to_upper() %>%
+      str_replace_all('\\.\\s?','\\. ') %>%
+      str_replace_all('\\.','') %>%
+      str_replace_all('SUKABUMI','SUK ABUMI') %>%
+      str_replace_all('KAB\\s?','KAB ') %>%
+      str_replace_all('SUK ABUMI','SUKABUMI')
+  ) %>%
+  .[!duplicated(.),] %>%
+  rename(city=bps_city)
+
+bpjskes$city=
+  bpjskes$city %>%
+  lapply(function(x){
+    x %>%
+      mutate(
+        to=
+          from %>%
+          str_to_upper() %>%
+          str_replace_all('\\.\\s?','\\. ') %>%
+          str_replace_all('\\.','') %>%
+          str_replace_all('SUKABUMI','SUK ABUMI') %>%
+          str_replace_all('KAB\\s?','KAB ') %>%
+          str_replace_all('SUK ABUMI','SUKABUMI') %>%
+          str_replace_all('ADM ','') %>%
+          str_replace_all('KEP ','KEPULAUAN ')
+        ,to=ifelse(to%in%c('MISSING','TIDAK DIRUJUK','BUKAN RUJUKAN'),NA,to)
+        ,to=ifelse(to%in%c('LUAR NEGERI'),'LUAR NEGERI/LAINNYA',to)
+        ,to=ifelse(to%in%c('LAIN-LAIN/LUAR NEGERI'),'LUAR NEGERI/LAINNYA',to)
+      ) %>%
+      mutate(to_nospace=str_replace_all(to,'\\s|-','')) %>%
+      left_join(
+        bps_2017 %>%
+          mutate(to_nospace=str_replace_all(city,'\\s|-','')),
+        by='to_nospace'
+      ) %>%
+      mutate(to=ifelse(is.na(city),to,city)) %>%
+      select(-to_nospace,-city) %>%
+      .[!duplicated(.),]
+  }) %>%
+  lapply(function(x){
+    K=mutate(x,check=sapply(X=to,FUN=function(X)any(X==bps_2017$city)))
+    I=which(!K$check)
+    K=K%>%
+      filter(!check)
+    
+    L=bps_2017 %>%
+      mutate(check=sapply(X=city,FUN=function(X)any(X==x))) %>%
+      filter(is.na(check))
+    
+    K=K %>%
+      mutate(
+        to=sapply(K$to,function(x){
+          Z=L %>%
+            select(city) %>%
+            mutate(
+              similarity=
+                sapply(X=L$city,Y=x,function(X,Y){
+                  cor(str_count(X,c(LETTERS,' ')),str_count(Y,c(LETTERS,' ')))
+                })
+            ) %>%
+            arrange(desc(similarity))
+          ifelse(Z$similarity[1]>0.7,Z$city[1],x)
+        })
+      )
+    x=mutate(x,to=to)
+    x$to[I]=K$to
+    x %>%
+      mutate(
+        to=case_when(
+          to=='HALMAHERA TIMUR'~'KAB HALMAHERA TIMUR'
+          ,to=='KAB BENER'~'KAB BENER MERIAH'
+          ,to=='KAB BINTAN (KEPRI)'~'KAB BINTAN'
+          ,to=='KAB BIREUN'~'KAB BIREUEN'
+          ,to=='KAB BOLAANG MONGONDOW UTR'~'KAB BOLAANG MONGONDOW UTARA'
+          ,to=='KAB BOLAANG MONGONDOW SLT'~'KAB BOLAANG MONGONDOW SELATAN'
+          ,to=='KAB BOLAANG MONGONDOW TMR'~'KAB BOLAANG MONGONDOW TIMUR'
+          ,to=='KAB BOLOANGMONGONDOW'~'KAB BOLAANG MONGONDOW'
+          ,to=='KAB BOUVEN DIGUL'~'KAB BOVEN DIGOEL'
+          ,to=='KAB T T S SOE'~'KOTA TIMOR TENGAH SELATAN'
+          ,to=='KAB MAPI'~'KAB MAPPI'
+          ,to=='KAB KEROM'~'KAB KEEROM'
+          ,to=='KAB MEMBRAMO RAYA'~'KAB MAMBERAMO RAYA'
+          ,to=='KAB O K U TIMUR'~'KAB OGAN KOMERING ULU TIMUR'
+          ,to=='KAB OGAN KOMERING HILIR'~'KAB OGAN KOMERING ILIR'
+          ,to=='KAB PASIR'~'KAB PASER'
+          ,to=='KAB SELAYAR'~'KAB KEPULAUAN SELAYAR'
+          ,to=='KAB SOLOK SEL'~'KAB SOLOK SELATAN'
+          ,to=='KAB SOR SEL'~'KAB SORONG SELATAN'
+          ,to=='KAB SUBULUSSALAM'~'KOTA SUBULUSSALAM'
+          ,TRUE~to
+        )
+      ) %>%
+      .[!duplicated(.),]
+  })
+```
+
+```{r Make correction for the city names, include=FALSE}
+bpjskes$proc=
+  bpjskes$proc %>%
+  lapply(X=seq(length(.)),Y=.,function(X,Y){
+    
+    lapply(X=seq(ncol(Y[[X]]))
+           ,Y=Y[[X]],Z=str_to_upper(str_remove_all(names(Y)[X],'\\d+'))
+           ,FUN=function(X,Y,Z){
+      
+        K=bpjskes$city %>%
+          .[str_detect(names(.),Z)] %>%
+          sapply(function(x)x$variable_name[1])
+        
+        if(colnames(Y)[X] %in% K){
+          L=bpjskes$city %>%
+            .[str_detect(names(.),Z)] %>%
+            .[[which(sapply(.,function(x)x$variable_name[1]==colnames(Y)[X]))]]
+          
+          select_at(Y,X) %>%
+            setNames('from') %>%
+            left_join(L,by='from') %>%
+            select(to) %>%
+            setNames(colnames(Y)[X])
+        }else{
+          select_at(Y,X)
+        }
+        
+      }) %>%
+      do.call(cbind,.)
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Make tables for province-city pairing correction, include=FALSE}
+bpjskes$province_city=
+  bpjskes$proc %>%
+  lapply(X=1:5,Y=.,function(X,Y){
+    if(any(str_detect(colnames(Y[[X]]),'province|city'))){
+      Y[[X]] %>%
+        select_at(colnames(.) %>% .[str_detect(.,'province|city')]) %>%
+        .[!duplicated(.),,drop=F] %>%
+        lapply(X=1:(ncol(.)/2),Y=.,function(X,Y){
+          if(X==1) setNames(Y[,1:2],c('province','city'))
+          else setNames(Y[,3:4],c('province','city'))
+        }) %>%
+        do.call(rbind,.) %>%
+        .[!duplicated(.),,drop=F] %>%
+        filter(!(is.na(province)|is.na(city))) %>%
+        filter(!(province=='NA'|city=='NA'))
+    }
+  }) %>%
+  do.call(rbind,.) %>%
+  .[!duplicated(.),,drop=F] %>%
+  mutate(
+    province=
+      case_when(
+        city=='KAB KEPAHIANG'~'BENGKULU'
+        ,city=='KAB KEPULAUAN MERANTI'~'RIAU'
+        ,city=='KAB MAHAKAM HULU'~'KALIMANTAN TIMUR'
+        ,city=='KAB MANOKWARI SELATAN'~'PAPUA BARAT'
+        ,city=='KAB NIAS BARAT'~'SUMATERA UTARA'
+        ,city=='KAB NIAS UTARA'~'SUMATERA UTARA'
+        ,city=='KAB PANGKAJENE DAN KEPULAUAN'~'SULAWESI SELATAN'
+        ,city=='KAB PENUKAL ABAB LEMATANG ILIR'~'SUMATERA SELATAN'
+        ,city=='KAB PESISIR BARAT'~'LAMPUNG'
+        ,city=='KAB SIAU TAGULANDANG BIARO'~'SULAWESI UTARA'
+        ,city=='KAB SOLOK SELATAN'~'SUMATERA BARAT'
+        ,city=='KOTA MALUKU TENGGARA BARAT'~'MALUKU'
+        ,TRUE~province
+      )
+  ) %>%
+  .[!duplicated(.),,drop=F] %>%
+  `rownames<-`(NULL)
+```
+
+```{r Make correction for the province-city pairing, include=FALSE}
+bpjskes$proc=
+  bpjskes$proc %>%
+  lapply(function(x){
+    
+    if(any(str_detect(colnames(x),'province|city'))){
+      lapply(X=seq(ncol(x)),Y=x,FUN=function(X,Y){
+        
+          if(str_detect(colnames(Y)[X],'province|city')){
+            Z=colnames(Y)[X] %>%
+              str_split_fixed('_',2) %>%
+              .[,1] %>%
+              paste0(c('_province','_city'))
+            
+            K=bpjskes$province_city %>%
+              setNames(Z) %>%
+              right_join(Y[,Z[2],drop=F],by=Z[2])
+            
+            if(str_detect(colnames(Y)[X],'province')){
+              K[,Z[1],drop=F]
+            }else{
+              K[,Z[2],drop=F]
+            }
+          }else{
+            Y[,X,drop=F]
+          }
+        
+        }) %>%
+        do.call(cbind,.)
+    }else{
+      x
+    }
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Create a function to extract unique values of a variable, include=FALSE}
+extract_unique=function(column_text,db_idx){
+  bpjskes$proc %>%
+    lapply(X=db_idx,Y=.,function(X,Y){
+      
+      if(any(str_detect(colnames(Y[[X]]),column_text))){
+        Y[[X]] %>%
+          select_at(colnames(.) %>% .[str_detect(.,column_text)]) %>%
+          gather() %>%
+          .[,'value',drop=F] %>%
+          .[!duplicated(.) & !is.na(.),,drop=F]
+      }
+      
+    }) %>%
+    do.call(rbind,.) %>%
+    .[!duplicated(.)
+      & !is.na(.$value)
+      & str_to_lower(.$value)!='missing',,drop=F] %>%
+    arrange(value) %>%
+    rename_at('value',function(x){
+      ifelse(
+        substr(column_text,1,1)=='_'
+        ,substr(column_text,2,str_count(column_text))
+        ,column_text
+      )
+    }) %>%
+    `rownames<-`(NULL)
+}
+```
+
+```{r Make manual correction for procedure description, include=FALSE}
+bpjskes$proc=
+  extract_unique('procedure_desc',1:4) %>%
+  mutate(
+    to=
+      c(
+        'medical evacuation or ambulance on water'
+        ,'medical evacuation or ambulance on land'
+        ,'glucose test, unspecified'
+        ,'blood sugar test, post-prandial'
+        ,'blood sugar test, fasting (back-referral/chronic disease program)'
+        ,'blood sugar test, random (back-referral/chronic disease program)'
+        ,'hemoglobin test'
+        ,'HbA1c test (back-referral/chronic disease program)'
+        ,'hecting, 1 to 3 stitches'
+        ,'hecting, 6 to 10 stitches'
+        ,'hematocrit test'
+        ,'cholesterol test, HDL'
+        ,'cholesterol test, LDL'
+        ,'cholesterol test, total'
+        ,'vaginal delivery, cost correction'
+        ,'inpatient, cost correction'
+        ,'creatinine blood test'
+        ,'erythrocyte sedimentation rate (ESR) test'
+        ,'white blood cell (WBC) count'
+        ,'malaria parasite count'
+        ,'microalbuminuria test'
+        ,'nebulizer use'
+        ,'vaginal delivery, with basic emergency obstetric care'
+        ,'vaginal delivery, normal'
+        ,'vaginal delivery, normal'
+        ,'vaginal delivery, normal'
+        ,'vaginal delivery, normal'
+        ,'antenatal care, fertility and family survey'
+        ,'antenatal care, first'
+        ,'antenatal care, second'
+        ,'antenatal care, third'
+        ,'antenatal care, fourth'
+        ,'contraceptive care, intrauterine device insertion'
+        ,'contraceptive care, injection'
+        ,'contraceptive care, complication management'
+        ,'postnatal care, fertility and family survey'
+        ,'postnatal care, first'
+        ,'postnatal care, second'
+        ,'postnatal care, third'
+        ,'postnatal care, fourth'
+        ,'prereferral intervention'
+        ,'postpartum care'
+        ,'contraceptive care, implant insertion'
+        ,'catheterization, peripheral intravenous'
+        ,'catheterication, urine'
+        ,'post abortion care'
+        ,'contraceptive care, implant removal'
+        ,'wound care, suture removal'
+        ,'wound care, no hecting'
+        ,'inpatient, room'
+        ,'outpatient, general practice'
+        ,'Widal test'
+        ,'acetowhite test'
+        ,'obstetric/gynecology procedure'
+        ,'triglycerides test'
+        ,'platelet count'
+        ,'blood urea nitrogen test'
+      )
+  ) %>%
+  lapply(X=seq(length(bpjskes$proc)),Y=bpjskes$proc,Z=.,function(X,Y,Z){
+    if('procedure_desc' %in% colnames(Y[[X]])){
+      Y[[X]]=
+        left_join(Y[[X]],Z,by='procedure_desc') %>%
+        mutate(procedure_desc=to) %>%
+        select(-to)
+    }
+    Y[[X]]
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Make manual correction for CBG description, include=FALSE}
+bpjskes$proc=
+  extract_unique('cbg_cg_desc',1:4) %>%
+  mutate(
+    to=
+      c(
+        'outpatient, major surgery'
+        ,'inpatient, surgery'
+        ,'outpatient, minor surgery'
+        ,'inpatient, non-surgery'
+        ,'inpatient, maternal care'
+        ,'inpatient, neonatal care'
+        ,'outpatient, non-surgery'
+        ,'outpatient, maternal care'
+        ,'outpatient, neonatal care'
+      )
+  ) %>%
+  lapply(X=seq(length(bpjskes$proc)),Y=bpjskes$proc,Z=.,function(X,Y,Z){
+    if('cbg_cg_desc' %in% colnames(Y[[X]])){
+      Y[[X]]=
+        left_join(Y[[X]],Z,by='cbg_cg_desc') %>%
+        mutate(cbg_cg_desc=to) %>%
+        select(-to)
+    }
+    Y[[X]]
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Make manual correction for CBG-RIL description, include=FALSE}
+bpjskes$proc=
+  extract_unique('cbg_ril_desc',1:4) %>%
+  mutate(
+    to=
+      c(
+        'high (inpatient, resource intensity level 3)'
+        ,'outpatient'
+        ,'low (inpatient, resource intensity level 1)'
+        ,'intermediate (inpatient, resource intensity level 2)'
+      )
+  ) %>%
+  lapply(X=seq(length(bpjskes$proc)),Y=bpjskes$proc,Z=.,function(X,Y,Z){
+    if('cbg_ril_desc' %in% colnames(Y[[X]])){
+      Y[[X]]=
+        left_join(Y[[X]],Z,by='cbg_ril_desc') %>%
+        mutate(cbg_ril_desc=to) %>%
+        select(-to)
+    }
+    Y[[X]]
+  }) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Unite all partitions of ICD-9 procedure codes, include=FALSE}
+bpjskes$proc$fkl=
+  bpjskes$proc$fkl %>%
+  unite(
+    icd9_code_desc
+    ,icd9_code_desc
+    ,icd9_code_desc0
+    ,icd9_code_desc1
+    ,icd9_code_desc2
+    ,icd9_code_desc3
+    ,icd9_code_desc4
+    ,sep=''
+  ) %>%
+  mutate(icd9_code_desc=str_remove_all(icd9_code_desc,'NA'))
+```
+
+```{r Change missing as character into NA, include=FALSE}
+bpjskes$proc=
+  bpjskes$proc %>%
+  pblapply(X=seq(length(.)),Y=.,function(X,Y)
+    
+    Y[[X]] %>%
+      lapply(X=seq(ncol(.)),Y=.,function(X,Y){
+        
+        if(is.character(Y[[X]])){
+          Y[,X,drop=F] %>%
+            mutate_all(function(column)
+              ifelse(str_to_lower(column)=='missing',NA,column)
+            )
+        }else{
+          Y[,X,drop=F]
+        }
+        
+      }) %>%
+      do.call(cbind,.)
+    
+  ) %>%
+  setNames(names(bpjskes$proc))
+```
+
+```{r Separate composite procedure codes into a different table, include=FALSE}
+bpjskes$proc$fkl3=
+  bpjskes$proc$fkl %>%
+  select(visit_id,icd9_code_desc) %>%
+  separate_rows(icd9_code_desc,sep=';') %>%
+  mutate(icd9_code_desc=trimws(icd9_code_desc)) %>%
+  filter(!is.na(icd9_code_desc))
+```
+
+```{r Remove ICD-9 procedure code column from the source table, include=FALSE}
+bpjskes$proc$fkl=
+  bpjskes$proc$fkl %>%
+  select(-icd9_code_desc)
+```
+
+```{r Classify householder based on the insurance utilization, include=FALSE}
+hh_id=list()
+
+hh_id$fkp=
+  c(bpjskes$proc$fkp$householder_id,bpjskes$proc$pnk$householder_id) %>%
+  .[!duplicated(.)]
+
+hh_id$fkl=
+  c(bpjskes$proc$fkl$householder_id
+    ,left_join(
+      bpjskes$proc$fkl2
+      ,select(bpjskes$proc$fkl,visit_id,householder_id)
+      ,by='visit_id'
+    )$householder_id) %>%
+  .[!duplicated(.)]
+
+hh_id$idx$cat1=
+  which(
+    !bpjskes$proc$pstv$householder_id
+    %in% union(hh_id$fkp,hh_id$fkl)
+  )
+hh_id$idx$cat2=
+  which(
+    bpjskes$proc$pstv$householder_id
+    %in% setdiff(hh_id$fkp,hh_id$fkl)
+  )
+hh_id$idx$cat3=
+  which(
+    bpjskes$proc$pstv$householder_id
+    %in% c(intersect(hh_id$fkp,hh_id$fkl),hh_id$fkl)
+  )
+
+bpjskes$proc$pstv=
+  bpjskes$proc$pstv %>%
+  left_join(
+    rbind(
+      mutate(
+          bpjskes$proc$pstv[hh_id$idx$cat1,'householder_id',drop=F]
+          ,sample_cat=1
+        ) %>% 
+        .[!duplicated(.),]
+      ,mutate(
+          bpjskes$proc$pstv[hh_id$idx$cat2,'householder_id',drop=F]
+          ,sample_cat=2
+        ) %>%
+        .[!duplicated(.),]
+      ,mutate(
+          bpjskes$proc$pstv[hh_id$idx$cat3,'householder_id',drop=F]
+          ,sample_cat=3
+        ) %>%
+        .[!duplicated(.),]
+    )
+    ,by='householder_id'
+  )
+```
+
+```{r Estimate strata variable used to make the sample dataset, include=FALSE}
+bpjskes$proc$est_strata=
+  bpjskes$proc$pstv %>%
+  select(
+    householder_id
+    ,healthcare_holder
+    ,healthcare_type
+    ,healthcare_province
+    ,healthcare_city
+    ,sampling_weight
+    ,sample_cat
+  ) %>%
+  .[!duplicated(.),] %>%
+  group_by(
+    healthcare_holder
+    ,healthcare_type
+    ,healthcare_province
+    ,healthcare_city
+    ,sampling_weight
+    ,sample_cat
+  ) %>%
+  summarize(est_householder=n()) %>%
+  ungroup() %>%
+  mutate(est_strata_id=str_pad(1:nrow(.),str_count(nrow(.)),'left',0)) %>%
+  select_at(
+    c('est_strata_id'
+      ,'est_householder'
+      ,colnames(.) %>% .[!.%in%c('est_strata_id','est_householder')])
+  )
+```
+
+```{r figure-1, echo=FALSE, fig.cap='Householders per estimated strata'}
+rbind(
+    bpjskes$proc$est_strata %>%
+      mutate(subset='All')
+    ,bpjskes$proc$est_strata %>%
+      filter(!est_householder%in%c(1)) %>%
+      mutate(subset='Max. 1 householder')
+    ,bpjskes$proc$est_strata %>%
+      filter(!est_householder%in%c(1:10)) %>%
+      mutate(subset='Max. 10 householders')
+    ,bpjskes$proc$est_strata %>%
+      filter(!est_householder%in%c(1:20)) %>%
+      mutate(subset='Max. 20 householders')
+    ,bpjskes$proc$est_strata %>%
+      filter(!est_householder%in%c(1:30)) %>%
+      mutate(subset='Max. 30 householders')
+  ) %>%
+  qplot(est_householder,data=.,geom='histogram',binwidth=1) +
+  facet_wrap(~subset,scales='free') +
+  scale_x_continuous('Number of householders per estimated strata')
+```
+
+```{r Check sampling-related statistics, eval=FALSE, include=FALSE}
+bpjskes$proc$pstv %>%
+  select(householder_id,sampling_weight) %>%
+  .[!duplicated(.),] %>%
+  pull(sampling_weight) %>%
+  sum()
+
+bpjskes$proc$est_strata %>%
+  group_by(sample_cat) %>%
+  summarize(n=n())
+
+length(hh_id$fkp)
+length(setdiff(hh_id$fkp,hh_id$fkl))
+```
+
+```{r Join estimated strata as the healthcare provider identity, include=FALSE}
+bpjskes$proc$pstv=
+  bpjskes$proc$pstv %>% 
+  left_join(
+    bpjskes$proc$est_strata,
+    by=c('healthcare_holder'
+         ,'healthcare_type'
+         ,'healthcare_province'
+         ,'healthcare_city'
+         ,'sampling_weight'
+         ,'sample_cat')
+  )
+
+bpjskes$proc$fkp=
+  bpjskes$proc$fkp %>%
+  left_join(select(bpjskes$proc$pstv,subject_id,est_strata_id),by='subject_id')
+
+bpjskes$proc$pnk=
+  bpjskes$proc$pnk %>%
+  left_join(select(bpjskes$proc$pstv,subject_id,est_strata_id),by='subject_id')
+
+bpjskes$proc$fkl=
+  bpjskes$proc$fkl %>%
+  left_join(select(bpjskes$proc$pstv,subject_id,est_strata_id),by='subject_id')
+```
+
+```{r Do manual check for unique values each variable, eval=FALSE, include=FALSE}
+extract_unique('family_status',1:4)
+extract_unique('sex',1:4)
+extract_unique('marital_status',1:4)
+extract_unique('class',1:4)
+extract_unique('occupation_segment',1:4)
+extract_unique('province',1:4)
+extract_unique('city',1:4)
+extract_unique('_holder',1:4)
+extract_unique('healthcare_type',1:4)
+extract_unique('category',1:4)
+extract_unique('level',1:4)
+extract_unique('department',1:4)
+extract_unique('discharge_status',1:4)
+extract_unique('icd10_3mer_desc',1:5)
+extract_unique('icd10_code',1:5)
+extract_unique('icd10_desc',1:4)
+extract_unique('visit_type',1:4)
+extract_unique('procedure_desc',1:4)
+extract_unique('cbg_code',1:4)
+extract_unique('cbg_cmg_desc',1:4)
+extract_unique('cbg_cg_desc',1:4)
+extract_unique('cbg_ct_desc',1:4)
+extract_unique('cbg_ril_desc',1:4)
+extract_unique('icd9_code_desc',6)
+extract_unique('region',1:4)
+extract_unique('sa_code',1:4)
+extract_unique('sp_code',1:4)
+extract_unique('sp_desc',1:4)
+extract_unique('rr_code',1:4)
+extract_unique('rr_desc',1:4)
+extract_unique('si_code',1:4)
+extract_unique('si_desc',1:4)
+extract_unique('sd_code',1:4)
+extract_unique('sd_desc',1:4)
+```
+
+```{r Save clean tables to R files, include=FALSE}
+saveRDS(bpjskes$proc$pstv,'data/ptsv.rds')
+saveRDS(bpjskes$proc$fkp,'data/fkp.rds')
+saveRDS(bpjskes$proc$pnk,'data/pnk.rds')
+saveRDS(bpjskes$proc$fkl,'data/fkl.rds')
+saveRDS(bpjskes$proc$fkl2,'data/fkl2.rds')
+saveRDS(bpjskes$proc$fkl3,'data/fkl3.rds')
+saveRDS(bpjskes$proc$est_strata,'data/est_strata.rds')
+
+save.image('preprocessing1.RData')
+```
+
+
+# From clean to to public data
+
+## Public data I for any users
+
+```{r Run if resuming work only, eval=FALSE, include=FALSE}
+load('preprocessing1.RData')
+```
+
+```{r Make extract_unique() without arranging the output, include=FALSE}
+extract_unique_noarrange=function(column_text,db_idx){
+  bpjskes$proc %>%
+    lapply(X=db_idx,Y=.,function(X,Y){
+      
+      if(any(str_detect(colnames(Y[[X]]),column_text))){
+        Y[[X]] %>%
+          select_at(colnames(.) %>% .[str_detect(.,column_text)]) %>%
+          gather() %>%
+          .[,'value',drop=F] %>%
+          .[!duplicated(.) & !is.na(.),,drop=F]
+      }
+      
+    }) %>%
+    do.call(rbind,.) %>%
+    .[!duplicated(.)
+      & !is.na(.$value)
+      & str_to_lower(.$value)!='missing',,drop=F] %>%
+    rename_at('value',function(x){
+      ifelse(
+        substr(column_text,1,1)=='_'
+        ,substr(column_text,2,str_count(column_text))
+        ,column_text
+      )
+    }) %>%
+    `rownames<-`(NULL)
+}
+```
+
+```{r Create a container list of public data, include=FALSE}
+public=list()
+```
+
+```{r Create public codes to deidentify province and city names, include=FALSE}
+public$province_code=
+  extract_unique_noarrange('province',1:4) %>%
+  mutate(to=str_pad(1:nrow(.),str_count(nrow(.)),'left','0'))
+
+public$city_code=
+  bpjskes$province_city %>%
+  right_join(extract_unique('city',1:4),by='city') %>%
+  right_join(public$province_code,by='province') %>%
+  lapply(X=seq(length(.$province %>% .[!duplicated(.)]))
+         ,Y=.$province %>% .[!duplicated(.)]
+         ,Z=.
+         ,FUN=function(X,Y,Z){
+    
+    filter(Z,province==Y[X]) %>%
+      mutate(to=paste0(to,str_pad(1:nrow(.),str_count(nrow(Z)),'left','0')))
+    
+  }) %>%
+  do.call(rbind,.) %>%
+  select(-province)
+```
+
+```{r Deidentify variables that may refer to the BPJS Kesehatan, include=FALSE}
+public$data=
+  bpjskes$proc %>%
+  lapply(function(x){
+    
+    if(any(colnames(x)=='cbg_icd10_desc')){
+      select(x,-cbg_icd10_desc)
+    }else{
+      x
+    }
+    
+  }) %>%
+  lapply(function(x){
+    
+    if(any(str_detect(colnames(x),'province|city'))){
+      lapply(X=seq(ncol(x)),Y=x,FUN=function(X,Y){
+        
+          if(str_detect(colnames(Y)[X],'province')){
+            Y[,X,drop=F] %>%
+              left_join(
+                setNames(public$province_code,c(colnames(Y)[X],'to'))
+                ,by=colnames(Y)[X]
+              ) %>%
+              select(to) %>%
+              setNames(colnames(Y)[X])
+          }else if(str_detect(colnames(Y)[X],'city')){
+            Y[,X,drop=F] %>%
+              left_join(
+                setNames(public$city_code,c(colnames(Y)[X],'to'))
+                ,by=colnames(Y)[X]
+              ) %>%
+              select(to) %>%
+              setNames(colnames(Y)[X])
+          }else{
+            Y[,X,drop=F]
+          }
+        
+        }) %>%
+        do.call(cbind,.)
+    }else{
+      x
+    }
+    
+  }) %>%
+  lapply(function(x){
+    
+    if(any(str_detect(colnames(x),'department'))){
+      x[,colnames(x) %>% .[!str_detect(.,'department')],drop=F]
+    }else{
+      x
+    }
+    
+  }) %>%
+  lapply(function(x){
+    
+    if(any(str_detect(colnames(x),'empty'))){
+      x[,colnames(x) %>% .[!str_detect(.,'empty')],drop=F]
+    }else{
+      x
+    }
+    
+  }) %>%
+  lapply(function(x){
+    
+    if(any(str_detect(colnames(x),'tariff|cost'))){
+      lapply(X=seq(ncol(x)),Y=x,FUN=function(X,Y){
+          if(str_detect(colnames(Y)[X],'tariff|cost')){
+            Y[,X,drop=F] %>%
+              mutate_all(function(x)round(x/15000*100))
+          }else{
+            Y[,X,drop=F]
+          }
+        }) %>%
+        do.call(cbind,.)
+    }else{
+      x
+    }
+    
+  })
+```
+
+```{r Re-arrange tables, include=FALSE}
+public$data=
+  list(
+    subject=public$data[[1]]
+    ,strata=public$data[[7]]
+    ,visit=
+      public$data[2:4] %>%
+      lapply(X=seq(length(.)),Y=.,function(X,Y){
+        
+        if(names(Y)[X]=='fkp'){
+          insurance_model='Primary care, capitation'
+        }else if(names(Y)[X]=='pnk'){
+          insurance_model='Primary care, fee for service (FFS)'
+        }else{
+          insurance_model='Secondary/tertiary care, bundled payments'
+        }
+        
+        mutate(Y[[X]],insurance_model=insurance_model)
+        
+      }) %>%
+      do.call(bind_rows,.)%>%
+      select_at(c('insurance_model',colnames(.) %>% .[.!='insurance_model']))
+    ,secondary_diagnoses=public$data[[5]]
+    ,procedures=public$data[[6]]
+  )
+
+public$data$admission_diagnosis=
+  public$data$visit %>%
+  select(
+    visit_id
+    ,admission_icd10_3mer_desc
+    ,admission_icd10_code
+    ,admission_icd10_desc
+  ) %>%
+  filter(!is.na(admission_icd10_3mer_desc))
+
+public$data$visit=
+  public$data$visit %>%
+  select(
+    -admission_icd10_3mer_desc
+    ,-admission_icd10_code
+    ,-admission_icd10_desc
+  ) %>%
+  unite(
+    icd10_3mer_desc
+    ,icd10_3mer_desc
+    ,primary_icd10_3mer_desc
+    ,sep=''
+    ,na.rm=T
+  ) %>%
+  unite(icd10_code,icd10_code,primary_icd10_code,sep='',na.rm=T) %>%
+  unite(icd10_desc,icd10_desc,primary_icd10_desc,sep='',na.rm=T)
+
+public$data=
+  list(
+    subject=public$data$subject
+    ,strata=public$data$strata
+    ,visit=public$data$visit
+    ,admission_diagnosis=public$data$admission_diagnosis
+    ,secondary_diagnoses=public$data$secondary_diagnoses
+    ,procedures=public$data$procedures
+  )
+```
+
+```{r Save public data I tables to an R file, include=FALSE}
+saveRDS(public,'data/public.rds')
+```
+
+
+## Public data II for medhist package (based on public data I)
+
+```{r More deidentification for limited use by the package only, include=FALSE}
+public2=list()
+
+public2$healthcare=
+  public$data$strata %>%
+  select(est_strata_id,sample_cat,sampling_weight
+         ,healthcare_province,healthcare_city) %>%
+  rename(healthcare_id=est_strata_id) %>%
+  rename(healthcare_country=healthcare_province) %>%
+  .[!duplicated(.),] %>%
+  arrange(healthcare_id)
+
+public2$subject=
+  public$data$subject %>%
+  select(subject_id,householder_id,est_strata_id
+         ,birth_date,family_status,sex,marital_status
+         ,insurance_class,occupation_segment,subject_province,subject_city) %>%
+  rename(healthcare_id=est_strata_id) %>%
+  rename(subject_country=subject_province) %>%
+  .[!duplicated(.),] %>%
+  arrange(healthcare_id,householder_id,subject_id)
+
+public2$visit_cap=
+  public$data$visit %>%
+  filter(insurance_model=='Primary care, capitation') %>%
+  mutate(
+    insurance_model='Capitation'
+    ,healtcare_level='Primary care'
+  ) %>%
+  select(visit_id,subject_id,est_strata_id
+         ,admission_date,discharge_date
+         ,discharge_status) %>%
+  rename(healthcare_id=est_strata_id) %>%
+  .[!duplicated(.),] %>%
+  arrange(factor(subject_id,public2$subject$subject_id),admission_date)
+
+public2$visit_ffs=
+  public$data$visit %>%
+  filter(insurance_model=='Primary care, fee for service (FFS)') %>%
+  mutate(
+    insurance_model='Fee for service'
+    ,healtcare_level='Primary care'
+  ) %>%
+  select(visit_id,subject_id,est_strata_id
+         ,admission_date,discharge_date
+         ,claimed_cost,verified_cost) %>%
+  rename(healthcare_id=est_strata_id) %>%
+  .[!duplicated(.),] %>%
+  arrange(factor(subject_id,public2$subject$subject_id),admission_date)
+
+public2$visit_drg=
+  public$data$visit %>%
+  filter(insurance_model=='Secondary/tertiary care, bundled payments') %>%
+  mutate(
+    insurance_model='Diagnosis-related group'
+    ,healtcare_level='Secondary/tertiary care'
+  ) %>%
+  select(visit_id,subject_id,est_strata_id
+         ,admission_date,discharge_date
+         ,discharge_status
+         ,claimed_cost,verified_cost) %>%
+  rename(healthcare_id=est_strata_id) %>%
+  .[!duplicated(.),] %>%
+  arrange(factor(subject_id,public2$subject$subject_id),admission_date)
+
+public2$diagnosis=
+  rbind(
+    public$data$admission_diagnosis %>%
+      select(visit_id,admission_icd10_code) %>%
+      rename(code=admission_icd10_code) %>%
+      mutate(code_type='Admission diagnosis') %>%
+      .[!duplicated(.),]
+    ,public$data$visit %>%
+      select(visit_id,icd10_code) %>%
+      rename(code=icd10_code) %>%
+      mutate(code_type='Discharge, primary diagnosis') %>%
+      .[!duplicated(.),]
+    ,public$data$secondary_diagnoses %>%
+      select(visit_id,secondary_icd10_code) %>%
+      rename(code=secondary_icd10_code) %>%
+      mutate(code_type='Discharge, secondary diagnosis') %>%
+      .[!duplicated(.),]
+    ,public$data$procedures %>%
+      select(visit_id,icd9_code_desc) %>%
+      separate(icd9_code_desc,c('icd9_code','icd9_desc'),' - ') %>%
+      select(-icd9_desc) %>%
+      rename(code=icd9_code) %>%
+      mutate(code_type='Procedure') %>%
+      .[!duplicated(.),]
+  ) %>%
+  `rownames<-`(NULL) %>%
+  arrange(
+    factor(
+      visit_id
+      ,do.call(
+          rbind
+          ,public2[c('visit_cap','visit_ffs','visit_drg')] %>%
+            lapply(function(x)select(x,'visit_id'))
+        )$visit_id %>%
+        .[!duplicated(.)]
+    )
+  ) %>%
+  list() %>%
+  lapply(function(x){
+    y=x %>%
+      select(code) %>%
+      .[!duplicated(.),,drop=F] %>%
+      mutate(
+        code2=sapply(code,function(x){
+          ifelse(
+            str_detect(x,'-')
+            ,str_remove_all(x,'\\s') %>%
+              str_sub(1,sapply(str_locate_all(.,'-'),function(x)x[1,1]-1))
+            ,x
+          )
+        })
+      )
+    x=left_join(x,y,by='code') %>%
+      mutate(code=code2) %>%
+      select(-code2)
+    x
+  }) %>%
+  .[[1]]
+
+public2$annotation=
+  public2$diagnosis %>%
+  select(code) %>%
+  filter(!duplicated(code) & !is.na(code) & code!='') %>%
+  left_join(
+    rbind(
+        public$data$visit %>%
+          select(icd10_code,icd10_desc) %>%
+          rename(code=icd10_code,desc=icd10_desc)
+        ,public$data$admission_diagnosis %>%
+          select(admission_icd10_code,admission_icd10_desc) %>%
+          rename(code=admission_icd10_code,desc=admission_icd10_desc)
+        ,public$data$procedures %>%
+          select(icd9_code_desc) %>%
+          separate(icd9_code_desc,c('code','desc'),'-') %>%
+          mutate_all(trimws)
+      ) %>%
+      .[!duplicated(.),] %>%
+      arrange(code) %>%
+      filter(!duplicated(code))
+    ,by='code'
+  ) %>%
+  arrange(code)
+```
+
+```{r Code to make public data II as medhist data, eval=FALSE, include=FALSE}
+healthcare=public2$healthcare
+usethis::use_data(healthcare)
+
+subject=public2$subject
+usethis::use_data(subject)
+
+visit_cap=public2$visit_cap
+usethis::use_data(visit_cap)
+
+visit_ffs=public2$visit_ffs
+usethis::use_data(visit_ffs)
+
+visit_drg=public2$visit_drg
+usethis::use_data(visit_drg)
+
+diagnosis=public2$diagnosis
+usethis::use_data(diagnosis)
+
+annotation=public2$annotation
+usethis::use_data(annotation)
+```
+
+```{r Save public data II tables to an R file, include=FALSE}
+saveRDS(public2,'data/public2.rds')
+```
+
+
+# Medical history datasets with specific outcome
+
+```{r Select population, include=FALSE}
+data(visit_cap)
+data(visit_ffs)
+data(visit_drg)
+data(diagnosis)
+data(annotation)
+
+population=
+  list(visit_cap,visit_ffs,visit_drg) %>%
+  lapply(select,visit_id,subject_id,healthcare_id,admission_date) %>%
+  do.call(rbind,.) %>%
+  left_join(diagnosis,by='visit_id') %>%
+  filter(!code_type%in%c('Admission diagnosis')) %>%
+  select(-code_type) %>%
+  mutate(db_start_date=as.Date('2015-01-01')) %>%
+  .[!duplicated(.),]
+```
+
+```{r Determine outcome, include=FALSE}
+outcome=
+  population %>%
+  extract_outcome('O1[4-5]',first,-1,'Z3[3-7]',last,0)
+
+set.seed(33)
+outcome=
+  outcome %>%
+  group_by(outcome) %>%
+  slice(sample(seq(n()),ceiling(n()*0.05),F)) %>%
+  ungroup()
+```
+
+```{r Construct medical history datasets, include=FALSE}
+mh_table=
+  outcome %>%
+  right_join(population,by='subject_id') %>%
+  select(visit_id, everything()) %>%
+  filter(admission_date<latest_date) %>%
+  select(-outcome,-latest_date) %>%
+  extract_medical_history()
+```
+
+```{r Construct unified data as a TidySet, echo=TRUE}
+medhistdata=compile_mh_outcome(mh_table,outcome)
+```
+
+```{r Add optional data, echo=TRUE}
+mdata=
+  outcome %>%
+  right_join(mh_table,by='subject_id') %>%
+  select(visit_id, everything()) %>%
+   select(
+    visit_id
+    ,subject_id
+    ,latest_date
+    ,outcome
+    ,healthcare_id
+    ,admission_date
+    ,db_start_date
+  ) %>%
+  colnames(.) %>%
+  data.frame(rowname=.) %>%
+  mutate(
+    labelDescription=case_when(
+      rowname=='visit_id'
+      ~'Visit ID. Each ID is unique to one episode (from admission to
+        discharge) per provider.'
+      ,rowname=='subject_id'
+      ~'Subject ID. Each ID is unique to one subject across healthcare
+        providers.'
+      ,rowname=='latest_date'
+      ~'Latest date of event/non-event. For event, this is admission_date
+        of subjects at 2 days before the date of event, which is earliest
+        date of either O14 or O15 encounter. For non-event, this is 
+        admission_date of subjects at the date of non-event, which is the 
+        latest date of Z33 to Z37 encounters.'
+      ,rowname=='outcome'
+      ~'A factor of which non-event is the first class between non-event
+        and event. Subjects with events are those encountered by either
+        O14 or O15 while those with non-events encountered by Z33 to Z37.'
+      ,rowname=='healthcare_id'
+      ~'Provider ID. The provider is the one of which the subject visits
+        (not always one the subject registered to). This connects to
+      healthcare data.'
+      ,rowname=='admission_date'
+      ~'Admission date of this visit.'
+      ,rowname=='db_start_date'
+      ~'Start date of the database.'
+      ,TRUE~''
+    )
+    ,labelDescription=
+      labelDescription %>%
+      str_replace_all('\n',' ') %>%
+      str_replace_all('\\s+',' ')
+  ) %>%
+  column_to_rownames(var='rowname')
+
+edata=
+  MIAME(
+    name='Herdiantri Sufriyana'
+    ,lab='Emily Chia-Yu Su Lab'
+    ,contact='herdiantrisufriyana@unusa.ac.id'
+    ,title='Medical history datasets with specific outcome'
+    ,abstract=
+      str_replace_all(
+        'This dataset is an example of medical-history table from
+         several tables of an electronic medical record database. The medical-
+         history table may be utilized for both causal and predictive
+        modeling. This dataset is a part of medhist package'
+        ,'\n',' '
+      ) %>%
+      str_replace_all('\\s+',' ')
+    ,url='https://github.com/herdiantrisufriyana/medhist'
+  )
+
+medhistdata=
+  medhistdata %>%
+  
+  # Update metadata in phenotype table
+  `phenoData<-`(
+    phenoData(.) %>%
+      `varMetadata<-`(mdata['outcome',,drop=F])
+  ) %>%
+  
+  # Add annotation in feature table
+  `featureData<-`(
+    fData(.) %>%
+      rownames_to_column(var='code') %>%
+      left_join(annotation,by='code') %>%
+      column_to_rownames(var='code') %>%
+      AnnotatedDataFrame()
+  )  %>%
+  
+  # Update experimenter information
+  `experimentData<-`(edata) %>%
+  
+  # Update annotation
+  `annotation<-`(value='ICD-10 (2016)') %>%
+  
+  # Update metadata in protocol table
+  `protocolData<-`(
+    protocolData(.) %>%
+      `varMetadata<-`(mdata %>% .[rownames(.) %>% .[.!='outcome'],,drop=F])
+  )
+```
+
+```{r Code to make the TidySet as medhist data, eval=FALSE, include=FALSE}
+usethis::use_data(medhistdata)
+usethis::use_data(mdata)
+usethis::use_data(edata)
+```
+
+```{r Save these tables to R files, include=FALSE}
+saveRDS(medhistdata,'data/medhistdata.rds')
+saveRDS(mdata,'data/mdata.rds')
+saveRDS(edata,'data/edata.rds')
+```
